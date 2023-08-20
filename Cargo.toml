@@ -6,17 +6,25 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cortex-m = "^0.7.7"      # Access to the generic ARM peripherals
-cortex-m-rt = "^0.7.3"  # Startup code for the ARM Core
-embedded-hal = "^0.2.4"  # Access to generic embedded functions (`set_high`)
-panic-halt = "^0.2.0"    # Panic handler
-ssd1306 = "^0.7.1"       # ssd1306 handler
-cortex-m-semihosting = "^0.3.7" # Allow ARM semihosting for debugging
-embedded-graphics = "^0.7.1" # embedded graphics driver for i2c displays
-panic-itm = "^0.4.2" # allows us to do real time debugging with processor
+embedded-hal = "0.2.7"
+nb = "1"
+cortex-m = "0.7.6"
+cortex-m-rt = "0.7.1"
+cortex-m-semihosting = "0.5.0"
+# Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
+panic-halt = "0.2.0"
 
-# Access to the stm32f103 HAL
-# [dependencies.stm32f1xx-hal]
-# # Bluepill contains a 64kB flash variant which is called medium density
-# features = ["stm32f103", "rt", "medium"]
-# version = "^0.10.0"
+[dependencies.stm32f1xx-hal]
+version = "0.10.0"
+features = ["rt", "stm32f103", "medium"]
+
+# default runner starts a GDB session, which requires OpenOCD to be running
+# eg. openocd -f interface/stlink-v2-1.cfg -f target/stm32f1x.cfg
+[target.thumbv7m-none-eabi]
+runner = "gdb-multiarch -q -x ./openocd.gdb"
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+]
+
+[build]
+target = "thumbv7m-none-eabi"
