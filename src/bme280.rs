@@ -289,14 +289,11 @@ where
                 Bme280Resolution::UltraHighRes => rx_buffer[2] & 0b11110000, // 20 bit
             };
         // TODO: is there a better way to pad in rust? In C we would use memcpy into a larger object
-        let rx_buffer_padded: [u8; 4] = [rx_buffer[0], rx_buffer[1], rx_buffer[2], 0];
-        hprintln!("{}", rx_buffer_padded[0]);
+        let rx_buffer_padded: [u8; 4] = [0, rx_buffer[0], rx_buffer[1], rx_buffer[2]];
         return i32::from_be_bytes(rx_buffer_padded);
     }
 
     fn compensate_t_double(&self, adc_temp: i32, dig_t1: u16, dig_t2: i16, dig_t3: i16) -> i32{
-        hprintln!("Compensating");
-        //let v = //( ((adc_temp>>3) - ((dig_t1 as i32)<<1)) ); //* (dig_t2 as i32);
         let adc_t_64: f64 = adc_temp as f64;
         let dig_t1_64: f64 = dig_t1 as f64;
         let dig_t2_64: f64 = dig_t2 as f64;
@@ -306,6 +303,7 @@ where
         // dig_t1_64 = 27504.0;
         // dig_t2_64 = 26435.0;
         // dig_t3_64 = -1000.0;
+        hprintln!("adc_t_64: {}", adc_t_64);
         let var1 = (adc_t_64/16384.0 - dig_t1_64/1024.0) * dig_t2_64;
         hprintln!("var 1: {}", var1);
         let var2 = ((adc_t_64/131072.0 - dig_t1_64/8192.0)) * ((adc_t_64/131072.0 - dig_t1_64/8192.0)) * dig_t3_64;
