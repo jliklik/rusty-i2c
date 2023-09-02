@@ -9,16 +9,23 @@ use cortex_m_semihosting::hprintln;
 use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
 use core::fmt::Debug;
 
-// If you write the MSB, it will send back the MSB followed by the LSB...??
-// https://dev.to/apollolabsbin/stm32f4-embedded-rust-at-the-hal-i2c-temperature-pressure-sensing-with-bmp180-578l
-
+/* CHIP CONSTANTS */
 pub const BME280_CHIP_ID: u8 = 0x60; // The knockoff BME280 has the BME180 id which is 0x60
-pub const BME280_ADDR: u8 = 0x76; // I2C address of the chip
-pub const REG_ID_ADDR: u8 = 0xD0; // chip ID number - should be 0x58
-pub const _REG_RESET_ADDR: u8 = 0xE0; // Writing 0xB6 to this register will power on reset the device
-pub const _REG_STATUS_ADDR: u8 = 0xF3; // status contains two bits which indicates status (image update or measuring statuses)
-pub const REG_CTRL_MEAS_ADDR: u8 = 0xF4; // Controls oversampling of the temp data and power mode
-pub const _REG_CONFIG_ADDR: u8 = 0xF5; // Sets rate, filter and interface options of the device
+pub const RESET_VAL: u8 = 0xB6;
+
+/* ADDRESSES */
+pub const BME280_ADDR: u8 = 0x76; 
+    // I2C address of the chip
+pub const REG_ID_ADDR: u8 = 0xD0; 
+    // chip ID number - should be 0x60 (0x58 for real BME280)
+pub const REG_RESET_ADDR: u8 = 0xE0; 
+    // Writing 0xB6 to this register will power on reset the device
+pub const _REG_STATUS_ADDR: u8 = 0xF3; 
+    // status contains two bits which indicates status (image update or measuring statuses)
+pub const REG_CTRL_MEAS_ADDR: u8 = 0xF4; 
+    // Controls oversampling of the temp data and power mode
+pub const _REG_CONFIG_ADDR: u8 = 0xF5; 
+    // Sets rate, filter and interface options of the device
 pub const REG_PRESS_ADDR: u8 = 0xF7; // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
     // note that not all bits of xlsb is used - only up to 4 extra bits are used based on resolution
 pub const REG_TEMP_ADDR: u8 = 0xFA; // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
@@ -34,7 +41,9 @@ pub const REG_DIG_P5_ADDR: u8 = 0x96;
 pub const REG_DIG_P6_ADDR: u8 = 0x98; 
 pub const REG_DIG_P7_ADDR: u8 = 0x9A; 
 pub const REG_DIG_P8_ADDR: u8 = 0x9C;
-pub const REG_DIG_P9_ADDR: u8 = 0x9E; 
+pub const REG_DIG_P9_ADDR: u8 = 0x9E;
+
+/* BITMASKS */
 pub const OSRS_P_MASK: u8 = 0b00011100;
 pub const OSRS_T_MASK: u8 = 0b11100000;
 
@@ -103,11 +112,6 @@ impl Default for Bme280Configs {
     }
 }
 
-pub struct Bme280Control {
-    temp_oversamp: bool, // oversampling gives higher resolution - osrs_t bits in control register 0xF4
-    pres_oversamp: bool  // oversampling gives higher resolution - osrs_p bits in control register 0xF4
-}
-
 #[repr(u8)] // allow us to cast enums to u16s
 pub enum Bme280Resolution {
     Skip = 0,
@@ -150,8 +154,13 @@ where
     }
 
     pub fn init(&mut self, temp_res: Bme280Resolution, pres_res: Bme280Resolution) {
+        self.reset();
         self.write_temp_res(temp_res);
         self.write_pres_res(pres_res);
+    }
+
+    pub fn reset(&mut self) {
+        self.write_u8(REG_RESET_ADDR, RESET_VAL)
     }
 
     pub fn read_configs(&mut self) {
@@ -180,14 +189,12 @@ where
     pub fn read_pres_res(&mut self) -> Bme280Resolution {
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
-        hprintln!("rx_buffer[0]: {}", rx_buffer[0]);
         Bme280Resolution::reverse((rx_buffer[0] & OSRS_P_MASK) >> 2 as u8)
     }
 
     pub fn read_temp_res(&mut self) -> Bme280Resolution {
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
-        hprintln!("rx_buffer[0]: {}", rx_buffer[0]);
         Bme280Resolution::reverse((rx_buffer[0] & OSRS_T_MASK) >> 5 as u8)
     }
 
@@ -196,16 +203,20 @@ where
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
         let existing_vals = !OSRS_T_MASK & rx_buffer[0];
-        let write_val = (temp_res << 5) & existing_vals;
+        //hprintln!("temp existing_vals: {}", existing_vals);
+        let write_val = (temp_res << 5) | existing_vals;
+        //hprintln!("temp write_val: {}", write_val);
         self.write_u8(REG_CTRL_MEAS_ADDR, write_val);
     }
 
     pub fn write_pres_res(&mut self, pres_res: Bme280Resolution) {
-        let pres_res = pres_res as u8;
+        let pres_res: u8 = pres_res as u8;
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
         let existing_vals = !OSRS_P_MASK & rx_buffer[0];
-        let write_val = (pres_res << 2) & existing_vals;
+        //hprintln!("pres existing_vals: {}", existing_vals);
+        let write_val = (pres_res << 2) | existing_vals;
+        //hprintln!("pres write_val: {}", write_val);
         self.write_u8(REG_CTRL_MEAS_ADDR, write_val);
     }
 
