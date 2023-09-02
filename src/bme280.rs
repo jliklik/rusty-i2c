@@ -23,7 +23,7 @@ pub const REG_CTRL_MEAS_ADDR: u8 = 0xF4;
     // Controls oversampling of the temp data and power mode
 pub const _REG_CONFIG_ADDR: u8 = 0xF5; 
     // Sets rate, filter and interface options of the device
-pub const REG_PRESS_ADDR: u8 = 0xF7; // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
+pub const REG_PRES_ADDR: u8 = 0xF7; // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
     // note that not all bits of xlsb is used - only up to 4 extra bits are used based on resolution
 pub const REG_TEMP_ADDR: u8 = 0xFA; // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
      // note that not all bits of xlsb is used - only up to 4 extra bits are used based on resolution
@@ -109,7 +109,7 @@ impl Default for Bme280Configs {
     }
 }
 
-#[repr(u8)] // allow us to cast enums to u16s
+#[repr(u8)] // allow us to cast enums to u8s
 pub enum Bme280Resolution {
     Skip = 0,
     UltraLowPower = 1,
@@ -251,6 +251,7 @@ where
         return u16::from_le_bytes(rx_buffer);
     }
 
+    // TODO: convert this to unit test (compare with reading dig_t1 using read_u8 with buffer length 2)
     pub fn read_dig_t1(&mut self) -> u16 {
         let mut rx_buffer: [u8; 1] = [0; 1];
         self.i2c.write_read(self.i2c_addr, &[0x88], &mut rx_buffer).unwrap(); //lsb
@@ -267,18 +268,16 @@ where
 
     pub fn read_temperature(&mut self) -> f32 {
         let adc_temp = self.read_temp_adc();
-        hprintln!("adc_temp: {}", adc_temp);
-        let temp = self.compensate_t_double(adc_temp, self.config.dig_t1, self.config.dig_t2, self.config.dig_t3);
-        hprintln!("temp: {}", temp);
+        let (_t_fine, temp) = self.compensate_t_double(adc_temp);
         return temp as f32 / 100.0; // celsius
     }
 
     pub fn read_temp_adc(&mut self) -> i32 {
         let mut rx_buffer: [u8; 3] = [0; 3];
         self.i2c.write_read(self.i2c_addr, &[REG_TEMP_ADDR], &mut rx_buffer).unwrap();
-        // MSB: 0xF7
-        // LSB: 0xF8
-        // XLSB: 0xF9, bits 7-4 - ordering if bits isi dfferent than config values!
+        // MSB: 0xFA
+        // LSB: 0xFB
+        // XLSB: 0xFC, bits 7-4 - ordering if bits is dfferent than config values!
         rx_buffer[2] = 
             match self.config.osrs_t {
                 Bme280Resolution::Skip => rx_buffer[2] & 0, // skipped
@@ -293,26 +292,74 @@ where
         return i32::from_be_bytes(rx_buffer_padded);
     }
 
-    fn compensate_t_double(&self, adc_temp: i32, dig_t1: u16, dig_t2: i16, dig_t3: i16) -> i32{
+    fn compensate_t_double(&self, adc_temp: i32) -> (f64, i32) {
         let adc_t_64: f64 = adc_temp as f64;
-        let dig_t1_64: f64 = dig_t1 as f64;
-        let dig_t2_64: f64 = dig_t2 as f64;
-        let dig_t3_64: f64 = dig_t3 as f64;
-        // Test values to make sure it is working
+        let dig_t1_64: f64 = self.config.dig_t1 as f64;
+        let dig_t2_64: f64 = self.config.dig_t2 as f64;
+        let dig_t3_64: f64 = self.config.dig_t3 as f64;
+        // Test values to make sure it is working - TODO: conver this to unit test
         // adc_t_64 = 519888.0;
         // dig_t1_64 = 27504.0;
         // dig_t2_64 = 26435.0;
         // dig_t3_64 = -1000.0;
-        hprintln!("adc_t_64: {}", adc_t_64);
         let var1 = (adc_t_64/16384.0 - dig_t1_64/1024.0) * dig_t2_64;
-        hprintln!("var 1: {}", var1);
         let var2 = ((adc_t_64/131072.0 - dig_t1_64/8192.0)) * ((adc_t_64/131072.0 - dig_t1_64/8192.0)) * dig_t3_64;
-        hprintln!("var 2: {}", var2);
         let t_fine = var1 + var2;
-        hprintln!("t_fine: {}", t_fine);
-        return (t_fine / 5120.0) as i32;
+        return (t_fine, (t_fine / 5120.0) as i32);
     }
 
+    pub fn read_pressure(&mut self) -> f32 {
+        let adc_pres= self.read_pres_adc();
+        let adc_temp = self.read_temp_adc();
+        let (t_fine, _temp) = self.compensate_t_double(adc_temp);
+        let pres = self.compensate_p_double(t_fine, adc_pres);
+        return pres as f32 / 256.0; // Pa
+    }
+
+    pub fn read_pres_adc(&mut self) -> i32 {
+        let mut rx_buffer: [u8; 3] = [0; 3];
+        self.i2c.write_read(self.i2c_addr, &[REG_PRES_ADDR], &mut rx_buffer).unwrap();
+        // MSB: 0xF7
+        // LSB: 0xF8
+        // XLSB: 0xF9, bits 7-4 - ordering if bits is dfferent than config values!
+        rx_buffer[2] = 
+            match self.config.osrs_t {
+                Bme280Resolution::Skip => rx_buffer[2] & 0, // skipped
+                Bme280Resolution::UltraLowPower => rx_buffer[2] & 0b00000000, // 16 bit
+                Bme280Resolution::LowPower => rx_buffer[2] & 0b10000000, // 17 bit
+                Bme280Resolution::StandardRes => rx_buffer[2] & 0b11000000, // 18 bit
+                Bme280Resolution::HighRes => rx_buffer[2] & 0b11100000, // 19 bit
+                Bme280Resolution::UltraHighRes => rx_buffer[2] & 0b11110000, // 20 bit
+            };
+        let rx_buffer_padded: [u8; 4] = [0, rx_buffer[0], rx_buffer[1], rx_buffer[2]];
+        return i32::from_be_bytes(rx_buffer_padded);
+    }
+
+    fn compensate_p_double(&mut self, t_fine: f64, adc_pres: i32) -> i32 {
+        let adc_p_64: f64 = adc_pres as f64;
+        let dig_p1_64 = self.config.dig_p1 as f64;
+        let dig_p2_64 = self.config.dig_p2 as f64;
+        let dig_p3_64 = self.config.dig_p3 as f64;
+        let dig_p4_64 = self.config.dig_p4 as f64;
+        let dig_p5_64 = self.config.dig_p5 as f64;
+        let dig_p6_64 = self.config.dig_p6 as f64;
+        let dig_p7_64 = self.config.dig_p7 as f64;
+        let dig_p8_64 = self.config.dig_p8 as f64;
+        let dig_p9_64 = self.config.dig_p9 as f64;
+
+        let mut var1 = t_fine/2.0 - 64000.0;
+        let mut var2 = var1 * var1 * dig_p6_64 / 32768.0;
+        var2 = var2 + var1 * dig_p5_64 * 2.0;
+        var2 = var2 / 4.0 + dig_p4_64 * 65536.0;
+        var1 = (dig_p3_64 * var1 * var1 / 524288.0) + (dig_p2_64 * var1 / 524288.0);
+        var1 = (1.0 + var1 / 32768.0) * dig_p1_64;
+        let mut p = 1048576.0 - adc_p_64;
+        p = (p - (var2 / 4096.0)) * 6250.0 / var1;
+        var1 = (dig_p9_64) * p * p / 2147483648.0;
+        var2 = p * dig_p8_64 / 32768.0;
+        p = p + (var1 + var2 + dig_p7_64) / 16.0;
+        return p as i32;
+    }
 
 }
 

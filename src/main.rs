@@ -63,7 +63,7 @@ fn main() -> ! {
     //     panic!("I2C reading is incorrect! Check register addresses in library?")
     // }
     hprintln!("temp: {}", sensor.read_temperature());
-    hprintln!("chip_id: {}", sensor.config.chip_id);
+    hprintln!("pres: {}", sensor.read_pressure());
 
     loop {
 
