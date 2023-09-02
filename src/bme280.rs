@@ -296,13 +296,23 @@ where
 
     fn compensate_t_double(&self, adc_temp: i32, dig_t1: u16, dig_t2: i16, dig_t3: i16) -> i32{
         hprintln!("Compensating");
-        let var1 = ( ( ((adc_temp>>3) - ((dig_t1 as i32)<<1)) ) * (dig_t2 as i32)) >> 11;
+        //let v = //( ((adc_temp>>3) - ((dig_t1 as i32)<<1)) ); //* (dig_t2 as i32);
+        let adc_t_64: f64 = adc_temp as f64;
+        let dig_t1_64: f64 = dig_t1 as f64;
+        let dig_t2_64: f64 = dig_t2 as f64;
+        let dig_t3_64: f64 = dig_t3 as f64;
+        // Test values to make sure it is working
+        // adc_t_64 = 519888.0;
+        // dig_t1_64 = 27504.0;
+        // dig_t2_64 = 26435.0;
+        // dig_t3_64 = -1000.0;
+        let var1 = (adc_t_64/16384.0 - dig_t1_64/1024.0) * dig_t2_64;
         hprintln!("var 1: {}", var1);
-        let var2 = ((( ((adc_temp>>4) - (dig_t2 as i32)) * ( (adc_temp>>4) - (dig_t1 as i32) )) >> 12) *
-            (dig_t3 as i32)) >> 14;
+        let var2 = ((adc_t_64/131072.0 - dig_t1_64/8192.0)) * ((adc_t_64/131072.0 - dig_t1_64/8192.0)) * dig_t3_64;
+        hprintln!("var 2: {}", var2);
         let t_fine = var1 + var2;
-        hprintln!("{}", t_fine);
-        return (t_fine * 5 + 128) >> 8; // divide by 5120.0
+        hprintln!("t_fine: {}", t_fine);
+        return (t_fine / 5120.0) as i32;
     }
 
 
