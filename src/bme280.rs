@@ -1,9 +1,6 @@
 use stm32f1xx_hal::{
-    i2c::{BlockingI2c, Mode},
-    pac::{self, I2C1, I2C2}, 
-    afio::Parts,
-    rcc::Clocks,
-    prelude::*, gpio::OpenDrain
+    pac::{self}, 
+    prelude::*
 }; // STM32F1 hardware abstraction layer crate
 use cortex_m_semihosting::hprintln;
 use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
@@ -265,29 +262,47 @@ where
         let mut rx_buffer_2: [u8; 2] = [0; 2];
         rx_buffer_2[0] = d1; //lsb
         rx_buffer_2[1] = d2; //msb
-        u16::from_le_bytes(rx_buffer_2)
+        return u16::from_le_bytes(rx_buffer_2);
     }
 
-    // pub fn read_temp_adc(&mut self) -> i32 {
-    //     let mut rx_buffer: [u8; 2] = [0; 2];
-    //     self.i2c.write_read(self.i2c_addr, &[REG_TEMP_ADDR], &mut rx_buffer).unwrap();
-    //     let t1 = rx_buffer[0];
-    //     self.i2c.write_read(self.i2c_addr, &[REG_DIG_T1_ADDR], &mut rx_buffer).unwrap();
-    //     let t1 = rx_buffer[0];
-    //     self.i2c.write_read(self.i2c_addr, &[REG_DIG_T1_ADDR], &mut rx_buffer).unwrap();
-    // }
+    pub fn read_temperature(&mut self) -> f32 {
+        let adc_temp = self.read_temp_adc();
+        hprintln!("adc_temp: {}", adc_temp);
+        let temp = self.compensate_t_double(adc_temp, self.config.dig_t1, self.config.dig_t2, self.config.dig_t3);
+        hprintln!("temp: {}", temp);
+        return temp as f32 / 100.0; // celsius
+    }
 
-    // pub fn read_temperature(&mut self) -> f32 {
+    pub fn read_temp_adc(&mut self) -> i32 {
+        let mut rx_buffer: [u8; 3] = [0; 3];
+        self.i2c.write_read(self.i2c_addr, &[REG_TEMP_ADDR], &mut rx_buffer).unwrap();
+        // MSB: 0xF7
+        // LSB: 0xF8
+        // XLSB: 0xF9, bits 7-4 - ordering if bits isi dfferent than config values!
+        rx_buffer[2] = 
+            match self.config.osrs_t {
+                Bme280Resolution::Skip => rx_buffer[2] & 0, // skipped
+                Bme280Resolution::UltraLowPower => rx_buffer[2] & 0b00000000, // 16 bit
+                Bme280Resolution::LowPower => rx_buffer[2] & 0b10000000, // 17 bit
+                Bme280Resolution::StandardRes => rx_buffer[2] & 0b11000000, // 18 bit
+                Bme280Resolution::HighRes => rx_buffer[2] & 0b11100000, // 19 bit
+                Bme280Resolution::UltraHighRes => rx_buffer[2] & 0b11110000, // 20 bit
+            };
+        // TODO: is there a better way to pad in rust? In C we would use memcpy into a larger object
+        let rx_buffer_padded: [u8; 4] = [rx_buffer[0], rx_buffer[1], rx_buffer[2], 0];
+        hprintln!("{}", rx_buffer_padded[0]);
+        return i32::from_be_bytes(rx_buffer_padded);
+    }
 
-    //     self.compensate_t_double(adc_temp, self.config.dig_t1, self.config.dig_t2, self.config.dig_t3);
-    // }
-
-    fn compensate_t_double(&self, adc_temp: i32, dig_t1: u8, dig_t2: i8, dig_t3: i8) -> i32{
+    fn compensate_t_double(&self, adc_temp: i32, dig_t1: u16, dig_t2: i16, dig_t3: i16) -> i32{
+        hprintln!("Compensating");
         let var1 = ( ( ((adc_temp>>3) - ((dig_t1 as i32)<<1)) ) * (dig_t2 as i32)) >> 11;
+        hprintln!("var 1: {}", var1);
         let var2 = ((( ((adc_temp>>4) - (dig_t2 as i32)) * ( (adc_temp>>4) - (dig_t1 as i32) )) >> 12) *
             (dig_t3 as i32)) >> 14;
         let t_fine = var1 + var2;
-        return (t_fine * 5 + 128) >> 8;
+        hprintln!("{}", t_fine);
+        return (t_fine * 5 + 128) >> 8; // divide by 5120.0
     }
 
 

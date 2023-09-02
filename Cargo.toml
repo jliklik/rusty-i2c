@@ -28,3 +28,9 @@ rustflags = [
 
 [build]
 target = "thumbv7m-none-eabi"
+
+[profile.dev]
+codegen-units = 1
+debug = 0
+lto = true
+opt-level = "z"

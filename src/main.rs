@@ -31,7 +31,7 @@ fn main() -> ! {
     let sda = 
         gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl);
 
-    let mut i2c = BlockingI2c::i2c1(
+    let i2c = BlockingI2c::i2c1(
         dp.I2C1,
         (scl, sda),
         &mut afio.mapr,
@@ -59,13 +59,11 @@ fn main() -> ! {
     sensor.init(bme280::Bme280Resolution::StandardRes, bme280::Bme280Resolution::StandardRes);
     sensor.read_configs();
     hprintln!("chip_id: {}", sensor.config.chip_id);
-    hprintln!("dig_t1: {}", sensor.config.dig_t1);
-    hprintln!("dig_t1: {}", sensor.read_dig_t1());
-    hprintln!("osrs_p: {}", sensor.read_pres_res() as u8);
-    hprintln!("osrs_t: {}", sensor.read_temp_res() as u8);
-    if sensor.config.dig_t1 != sensor.read_dig_t1() {
-        panic!("I2C reading is incorrect! Check register addresses in library?")
-    }
+    // if sensor.config.dig_t1 != sensor.read_dig_t1() {
+    //     panic!("I2C reading is incorrect! Check register addresses in library?")
+    // }
+    hprintln!("temp: {}", sensor.read_temperature());
+    hprintln!("chip_id: {}", sensor.config.chip_id);
 
     loop {
 
