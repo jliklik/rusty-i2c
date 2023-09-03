@@ -1,32 +1,25 @@
-use stm32f1xx_hal::{
-    pac::{self}, 
-    prelude::*
-}; // STM32F1 hardware abstraction layer crate
 use cortex_m_semihosting::hprintln;
 use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
 use core::fmt::Debug;
 
 /* CHIP CONSTANTS */
-pub const BME280_CHIP_ID: u8 = 0x60; // The knockoff BME280 has the BME180 id which is 0x60
+pub const BME280_CHIP_ID: u8 = 0x60; // BME180 ID 0x60 - temp, press and humidity sensor
+pub const _BMP280_CHIP_ID: u8 = 0x58; // BMP180 ID 0x60 - only temp and press sensor
 pub const RESET_VAL: u8 = 0xB6;
 
 /* ADDRESSES */
-pub const BME280_ADDR: u8 = 0x76; 
-    // I2C address of the chip
-pub const REG_ID_ADDR: u8 = 0xD0; 
-    // chip ID number - should be 0x60 (0x58 for real BME280)
+pub const BME280_ADDR: u8 = 0x76; // I2C address
+pub const REG_ID_ADDR: u8 = 0xD0; // chip ID
 pub const REG_RESET_ADDR: u8 = 0xE0; 
-    // Writing 0xB6 to this register will power on reset the device
+// Writing 0xB6 to REG_RESET_ADDR will power on reset the device
 pub const _REG_STATUS_ADDR: u8 = 0xF3; 
-    // status contains two bits which indicates status (image update or measuring statuses)
+// _REG_STATUS_ADDR contains two bits which indicates status (image update or measuring statuses)
 pub const REG_CTRL_MEAS_ADDR: u8 = 0xF4; 
-    // Controls oversampling of the temp data and power mode
+// REG_CTRL_MEAS_ADDR controls oversampling of the temp data and power mode
 pub const _REG_CONFIG_ADDR: u8 = 0xF5; 
-    // Sets rate, filter and interface options of the device
+// _REG_CONFIG_ADDR sets rate, filter and interface options of the device
 pub const REG_PRES_ADDR: u8 = 0xF7; // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
-    // note that not all bits of xlsb is used - only up to 4 extra bits are used based on resolution
 pub const REG_TEMP_ADDR: u8 = 0xFA; // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
-     // note that not all bits of xlsb is used - only up to 4 extra bits are used based on resolution
 pub const REG_DIG_T1_ADDR: u8 = 0x88;
 pub const REG_DIG_T2_ADDR: u8 = 0x8A; 
 pub const REG_DIG_T3_ADDR: u8 = 0x8C; 
@@ -63,9 +56,10 @@ pub const OSRS_T_MASK: u8 = 0b11100000;
 // Architecture 2: Generic struct
 // Generic struct - pass in I2C instead of creating it inside here - too difficult
 // and not much benefit to create i2c object in this module
-pub struct Bme280<I2cT> {
+pub struct Bme280<I2cT, Delay> {
     pub i2c_addr: u8,
     i2c: I2cT,
+    delay: Delay,
     pub config: Bme280Configs
 }
 
@@ -110,14 +104,16 @@ impl Default for Bme280Configs {
 }
 
 #[repr(u8)] // allow us to cast enums to u8s
+#[derive(Copy, Clone)]
 pub enum Bme280Resolution {
     Skip = 0,
     UltraLowPower = 1,
     LowPower = 2,
-    StandardRes = 3,
-    HighRes = 4,
-    UltraHighRes = 5
+    StandardRes = 4,
+    HighRes = 8,
+    UltraHighRes = 16
 }
+
 
 impl Bme280Resolution {
     pub fn reverse(val: u8) -> Self {
@@ -125,35 +121,54 @@ impl Bme280Resolution {
             0 => Bme280Resolution::Skip,
             1 => Bme280Resolution::UltraLowPower,
             2 => Bme280Resolution::LowPower,
-            3 => Bme280Resolution::StandardRes,
-            4 => Bme280Resolution::HighRes,
+            4 => Bme280Resolution::StandardRes,
+            8 => Bme280Resolution::HighRes,
             _ => Bme280Resolution::UltraHighRes
         }
     }
 }
 
+#[repr(u8)]
+pub enum Bme280Mode {
+    Sleep = 0,
+    Forced = 1,
+    Normal = 3,
+}
+
 // Specific implementation
-impl<I2cT> Bme280<I2cT>
+impl<I2cT, Delay> Bme280<I2cT, Delay>
 where 
     <I2cT as WriteRead>::Error: Debug,
     <I2cT as Write>::Error: Debug,
     <I2cT as Read>::Error: Debug,
     I2cT: embedded_hal::prelude::_embedded_hal_blocking_i2c_WriteRead + 
-        embedded_hal::prelude::_embedded_hal_blocking_i2c_Read +
-        embedded_hal::prelude::_embedded_hal_blocking_i2c_Write
+          embedded_hal::prelude::_embedded_hal_blocking_i2c_Read +
+          embedded_hal::prelude::_embedded_hal_blocking_i2c_Write,
+    Delay: embedded_hal::blocking::delay::DelayMs<u32>
 {
-    pub fn new(i2c: I2cT) -> Self {
+    pub fn new(i2c: I2cT, delay: Delay) -> Self {
         Bme280 {
             i2c_addr: BME280_ADDR,
             i2c: i2c,
+            delay: delay,
             config: Bme280Configs::default()
         }   
     }
 
     pub fn init(&mut self, temp_res: Bme280Resolution, pres_res: Bme280Resolution) {
         self.reset();
+        self.delay.delay_ms(500_u32);
+        self.set_power_mode(Bme280Mode::Normal);
+        self.delay.delay_ms(500_u32);
         self.write_temp_res(temp_res);
+        self.delay.delay_ms(500_u32);
         self.write_pres_res(pres_res);
+        self.delay.delay_ms(500_u32);
+    
+        // Debug
+        let mut rx_buffer: [u8; 1] = [0];
+        self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
+        hprintln!("control reg after init: {}", rx_buffer[0]);
     }
 
     pub fn reset(&mut self) {
@@ -183,6 +198,17 @@ where
         }
     }
 
+    pub fn set_power_mode(&mut self, mode: Bme280Mode) {
+        let mode: u8 = mode as u8;
+        let mut rx_buffer: [u8; 1] = [0];
+        self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
+        let existing_vals = !(OSRS_P_MASK | OSRS_T_MASK) & rx_buffer[0];
+        let write_val = (mode) | existing_vals;
+        //hprintln!("write_val: {}", write_val);
+        self.write_u8(REG_CTRL_MEAS_ADDR, write_val);
+    }
+
+
     pub fn read_pres_res(&mut self) -> Bme280Resolution {
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
@@ -199,10 +225,9 @@ where
         let temp_res = temp_res as u8;
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
+        //hprintln!("write temp existing control reg: {}", rx_buffer[0]);
         let existing_vals = !OSRS_T_MASK & rx_buffer[0];
-        //hprintln!("temp existing_vals: {}", existing_vals);
         let write_val = (temp_res << 5) | existing_vals;
-        //hprintln!("temp write_val: {}", write_val);
         self.write_u8(REG_CTRL_MEAS_ADDR, write_val);
     }
 
@@ -211,7 +236,7 @@ where
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
         let existing_vals = !OSRS_P_MASK & rx_buffer[0];
-        //hprintln!("pres existing_vals: {}", existing_vals);
+        //hprintln!("write pres existing control reg: {}", rx_buffer[0]);
         let write_val = (pres_res << 2) | existing_vals;
         //hprintln!("pres write_val: {}", write_val);
         self.write_u8(REG_CTRL_MEAS_ADDR, write_val);
@@ -268,28 +293,29 @@ where
 
     pub fn read_temperature(&mut self) -> f32 {
         let adc_temp = self.read_temp_adc();
+        hprintln!("adc_temp: {}", adc_temp);
         let (_t_fine, temp) = self.compensate_t_double(adc_temp);
-        return temp as f32 / 100.0; // celsius
+        return temp as f32; // celsius
     }
 
     pub fn read_temp_adc(&mut self) -> i32 {
         let mut rx_buffer: [u8; 3] = [0; 3];
         self.i2c.write_read(self.i2c_addr, &[REG_TEMP_ADDR], &mut rx_buffer).unwrap();
-        // MSB: 0xFA
-        // LSB: 0xFB
-        // XLSB: 0xFC, bits 7-4 - ordering if bits is dfferent than config values!
-        rx_buffer[2] = 
-            match self.config.osrs_t {
-                Bme280Resolution::Skip => rx_buffer[2] & 0, // skipped
-                Bme280Resolution::UltraLowPower => rx_buffer[2] & 0b00000000, // 16 bit
-                Bme280Resolution::LowPower => rx_buffer[2] & 0b10000000, // 17 bit
-                Bme280Resolution::StandardRes => rx_buffer[2] & 0b11000000, // 18 bit
-                Bme280Resolution::HighRes => rx_buffer[2] & 0b11100000, // 19 bit
-                Bme280Resolution::UltraHighRes => rx_buffer[2] & 0b11110000, // 20 bit
-            };
-        // TODO: is there a better way to pad in rust? In C we would use memcpy into a larger object
-        let rx_buffer_padded: [u8; 4] = [0, rx_buffer[0], rx_buffer[1], rx_buffer[2]];
-        return i32::from_be_bytes(rx_buffer_padded);
+        let mut msb = rx_buffer[0] as u64;
+        let mut lsb = rx_buffer[1] as u64;
+        let mut xlsb = rx_buffer[2] as u64;
+        if msb == 0x80 && lsb == 0x00 && xlsb == 0x0 {
+            // TODO: Bad news - turned off!!
+        }
+        hprintln!("temp msb: {}", msb);
+        hprintln!("temp lsb: {}", lsb);
+        hprintln!("temp xlsb: {}", xlsb);
+        msb = msb << 16;
+        lsb = lsb << 8;
+        xlsb = xlsb;
+        let mut sum = msb + lsb + xlsb;
+        sum = sum >> 4;
+        sum as i32
     }
 
     fn compensate_t_double(&self, adc_temp: i32) -> (f64, i32) {
@@ -310,33 +336,38 @@ where
 
     pub fn read_pressure(&mut self) -> f32 {
         let adc_pres= self.read_pres_adc();
+        hprintln!("adc_pres: {}", adc_pres);
         let adc_temp = self.read_temp_adc();
         let (t_fine, _temp) = self.compensate_t_double(adc_temp);
+        //t_fine = 128422.0;
         let pres = self.compensate_p_double(t_fine, adc_pres);
-        return pres as f32 / 256.0; // Pa
+        return pres as f32; // Pa
     }
 
     pub fn read_pres_adc(&mut self) -> i32 {
         let mut rx_buffer: [u8; 3] = [0; 3];
         self.i2c.write_read(self.i2c_addr, &[REG_PRES_ADDR], &mut rx_buffer).unwrap();
-        // MSB: 0xF7
-        // LSB: 0xF8
-        // XLSB: 0xF9, bits 7-4 - ordering if bits is dfferent than config values!
-        rx_buffer[2] = 
-            match self.config.osrs_t {
-                Bme280Resolution::Skip => rx_buffer[2] & 0, // skipped
-                Bme280Resolution::UltraLowPower => rx_buffer[2] & 0b00000000, // 16 bit
-                Bme280Resolution::LowPower => rx_buffer[2] & 0b10000000, // 17 bit
-                Bme280Resolution::StandardRes => rx_buffer[2] & 0b11000000, // 18 bit
-                Bme280Resolution::HighRes => rx_buffer[2] & 0b11100000, // 19 bit
-                Bme280Resolution::UltraHighRes => rx_buffer[2] & 0b11110000, // 20 bit
-            };
-        let rx_buffer_padded: [u8; 4] = [0, rx_buffer[0], rx_buffer[1], rx_buffer[2]];
-        return i32::from_be_bytes(rx_buffer_padded);
+        let mut msb = rx_buffer[0] as u64;
+        let mut lsb = rx_buffer[1] as u64;
+        let mut xlsb = rx_buffer[2] as u64;
+        if msb == 0x80 && lsb == 0x00 && xlsb == 0x0 {
+            // TODO: Bad news - turned off!!
+        }
+        hprintln!("pres msb: {}", msb);
+        hprintln!("pres lsb: {}", lsb);
+        hprintln!("pres xlsb: {}", xlsb);
+        msb = msb << 16;
+        lsb = lsb << 8;
+        xlsb = xlsb;
+        let mut sum = msb + lsb + xlsb;
+        sum = sum >> 4;
+        sum as i32
     }
 
     fn compensate_p_double(&mut self, t_fine: f64, adc_pres: i32) -> i32 {
         let adc_p_64: f64 = adc_pres as f64;
+        //let adc_p_64: f64 = 415148.0;
+        hprintln!("adc_p_64: {}", adc_p_64);
         let dig_p1_64 = self.config.dig_p1 as f64;
         let dig_p2_64 = self.config.dig_p2 as f64;
         let dig_p3_64 = self.config.dig_p3 as f64;
@@ -346,6 +377,16 @@ where
         let dig_p7_64 = self.config.dig_p7 as f64;
         let dig_p8_64 = self.config.dig_p8 as f64;
         let dig_p9_64 = self.config.dig_p9 as f64;
+        // hprintln!("tfine: {}", t_fine);
+        // let dig_p1_64: f64 = 36477.0;
+        // let dig_p2_64: f64 = -10685.0;
+        // let dig_p3_64: f64 = 3024.0;
+        // let dig_p4_64: f64 = 2855.0;
+        // let dig_p5_64: f64 = 140.0;
+        // let dig_p6_64: f64 = -7.0;
+        // let dig_p7_64: f64 = 15500.0;
+        // let dig_p8_64: f64 = -14600.0;
+        // let dig_p9_64: f64 = 6000.0;
 
         let mut var1 = t_fine/2.0 - 64000.0;
         let mut var2 = var1 * var1 * dig_p6_64 / 32768.0;
@@ -358,6 +399,7 @@ where
         var1 = (dig_p9_64) * p * p / 2147483648.0;
         var2 = p * dig_p8_64 / 32768.0;
         p = p + (var1 + var2 + dig_p7_64) / 16.0;
+        hprintln!("p: {}", p);
         return p as i32;
     }
 
