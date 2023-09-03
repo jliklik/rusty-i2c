@@ -307,9 +307,6 @@ where
         if msb == 0x80 && lsb == 0x00 && xlsb == 0x0 {
             // TODO: Bad news - turned off!!
         }
-        hprintln!("temp msb: {}", msb);
-        hprintln!("temp lsb: {}", lsb);
-        hprintln!("temp xlsb: {}", xlsb);
         msb = msb << 16;
         lsb = lsb << 8;
         xlsb = xlsb;
@@ -339,7 +336,6 @@ where
         hprintln!("adc_pres: {}", adc_pres);
         let adc_temp = self.read_temp_adc();
         let (t_fine, _temp) = self.compensate_t_double(adc_temp);
-        //t_fine = 128422.0;
         let pres = self.compensate_p_double(t_fine, adc_pres);
         return pres as f32; // Pa
     }
@@ -353,9 +349,9 @@ where
         if msb == 0x80 && lsb == 0x00 && xlsb == 0x0 {
             // TODO: Bad news - turned off!!
         }
-        hprintln!("pres msb: {}", msb);
-        hprintln!("pres lsb: {}", lsb);
-        hprintln!("pres xlsb: {}", xlsb);
+        // hprintln!("pres msb: {}", msb);
+        // hprintln!("pres lsb: {}", lsb);
+        // hprintln!("pres xlsb: {}", xlsb);
         msb = msb << 16;
         lsb = lsb << 8;
         xlsb = xlsb;
@@ -366,7 +362,6 @@ where
 
     fn compensate_p_double(&mut self, t_fine: f64, adc_pres: i32) -> i32 {
         let adc_p_64: f64 = adc_pres as f64;
-        //let adc_p_64: f64 = 415148.0;
         hprintln!("adc_p_64: {}", adc_p_64);
         let dig_p1_64 = self.config.dig_p1 as f64;
         let dig_p2_64 = self.config.dig_p2 as f64;
@@ -377,7 +372,6 @@ where
         let dig_p7_64 = self.config.dig_p7 as f64;
         let dig_p8_64 = self.config.dig_p8 as f64;
         let dig_p9_64 = self.config.dig_p9 as f64;
-        // hprintln!("tfine: {}", t_fine);
         // let dig_p1_64: f64 = 36477.0;
         // let dig_p2_64: f64 = -10685.0;
         // let dig_p3_64: f64 = 3024.0;

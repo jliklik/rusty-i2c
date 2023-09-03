@@ -45,7 +45,7 @@ fn main() -> ! {
         1000
     );
 
-    let mut delay = cp.SYST.delay(&clocks);
+    let delay = cp.SYST.delay(&clocks);
 
     // See the following pages for reference:
     // However, keep in mind that the chip that we actually have is the BMP280, not the BMP180
@@ -62,15 +62,15 @@ fn main() -> ! {
     sensor.read_configs();
     hprintln!("chip_id: {}", sensor.config.chip_id);
     hprintln!("temp: {}", sensor.read_temperature());
-    hprintln!("dig_p1: {}", sensor.config.dig_p1);
-    hprintln!("dig_p2: {}", sensor.config.dig_p2);
-    hprintln!("dig_p3: {}", sensor.config.dig_p3);
-    hprintln!("dig_p4: {}", sensor.config.dig_p4);
-    hprintln!("dig_p5: {}", sensor.config.dig_p5);
-    hprintln!("dig_p6: {}", sensor.config.dig_p6);
-    hprintln!("dig_p7: {}", sensor.config.dig_p7);
-    hprintln!("dig_p8: {}", sensor.config.dig_p8);
-    hprintln!("dig_p9: {}", sensor.config.dig_p9);
+    // hprintln!("dig_p1: {}", sensor.config.dig_p1);
+    // hprintln!("dig_p2: {}", sensor.config.dig_p2);
+    // hprintln!("dig_p3: {}", sensor.config.dig_p3);
+    // hprintln!("dig_p4: {}", sensor.config.dig_p4);
+    // hprintln!("dig_p5: {}", sensor.config.dig_p5);
+    // hprintln!("dig_p6: {}", sensor.config.dig_p6);
+    // hprintln!("dig_p7: {}", sensor.config.dig_p7);
+    // hprintln!("dig_p8: {}", sensor.config.dig_p8);
+    // hprintln!("dig_p9: {}", sensor.config.dig_p9);
     hprintln!("pres: {}", sensor.read_pressure());
 
     loop {
