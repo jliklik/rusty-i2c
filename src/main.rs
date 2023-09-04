@@ -49,20 +49,11 @@ fn main() -> ! {
 
     let mut sensor = bme280::Bme280::new(i2c, delay);
 
-    sensor.init(bme280::Bme280Resolution::UltraLowPower, bme280::Bme280Resolution::StandardRes);
+    sensor.init(bme280::BME280_RES_CONFIG_WEATHER_MONITORING);
     sensor.read_configs();
     hprintln!("chip_id: {}", sensor.config.chip_id);
-    hprintln!("temp: {}", sensor.read_temperature());
-    // hprintln!("dig_p1: {}", sensor.config.dig_p1);
-    // hprintln!("dig_p2: {}", sensor.config.dig_p2);
-    // hprintln!("dig_p3: {}", sensor.config.dig_p3);
-    // hprintln!("dig_p4: {}", sensor.config.dig_p4);
-    // hprintln!("dig_p5: {}", sensor.config.dig_p5);
-    // hprintln!("dig_p6: {}", sensor.config.dig_p6);
-    // hprintln!("dig_p7: {}", sensor.config.dig_p7);
-    // hprintln!("dig_p8: {}", sensor.config.dig_p8);
-    // hprintln!("dig_p9: {}", sensor.config.dig_p9);
-    hprintln!("pres: {}", sensor.read_pressure());
+    let (temp, pres, humd) = sensor.read_environment();
+    hprintln!("temp: {}, pres: {}, humd: {}", temp, pres, humd);
 
     loop {
 
