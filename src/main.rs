@@ -3,12 +3,13 @@
 #![no_std]
 #![no_main]
 
+use cortex_m;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::hprintln;
 use panic_halt as _;
 use stm32f1xx_hal::{
     i2c::{BlockingI2c, Mode},
-    pac, 
+    pac,
     prelude::*
 }; // STM32F1 hardware abstraction layer crate
 
@@ -19,6 +20,7 @@ fn main() -> ! {
 
     hprintln!("Starting program");
 
+    let cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
     let mut flash = dp.FLASH.constrain();
     let rcc = dp.RCC.constrain();
@@ -43,27 +45,15 @@ fn main() -> ! {
         1000
     );
 
-    // See the following pages for reference:
-    // However, keep in mind that the chip that we actually have is the BMP280, not the BMP180
-    // https://cdn-shop.adafruit.com/datasheets/BST-BMP280-DS001-11.pdf
-    // https://apollolabsblog.hashnode.dev/stm32f4-embedded-rust-at-the-hal-i2c-temperature-pressure-sensing-with-bmp180
-    // https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf
-    // https://docs.rs/bme280-rs/latest/src/bme280_rs/bme280.rs.html#87-102 
+    let delay = cp.SYST.delay(&clocks);
 
-    let mut sensor = bme280::Bme280::new(i2c);
+    let mut sensor = bme280::Bme280::new(i2c, delay);
 
-    hprintln!("Read configs: \r");
-
-    // write and then read
-    // - tell sensor which register we would like to read from, then receive the value
-    sensor.init(bme280::Bme280Resolution::StandardRes, bme280::Bme280Resolution::StandardRes);
+    sensor.init(bme280::BME280_RES_CONFIG_WEATHER_MONITORING);
     sensor.read_configs();
     hprintln!("chip_id: {}", sensor.config.chip_id);
-    // if sensor.config.dig_t1 != sensor.read_dig_t1() {
-    //     panic!("I2C reading is incorrect! Check register addresses in library?")
-    // }
-    hprintln!("temp: {}", sensor.read_temperature());
-    hprintln!("pres: {}", sensor.read_pressure());
+    let (temp, pres, humd) = sensor.read_environment();
+    hprintln!("temp: {} deg C, pres: {} Pa, humd: {}", (temp as f32/100.0), pres, humd);
 
     loop {
 
