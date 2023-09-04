@@ -53,7 +53,7 @@ fn main() -> ! {
     sensor.read_configs();
     hprintln!("chip_id: {}", sensor.config.chip_id);
     let (temp, pres, humd) = sensor.read_environment();
-    hprintln!("temp: {}, pres: {}, humd: {}", temp, pres, humd);
+    hprintln!("temp: {} deg C, pres: {} Pa, humd: {}", (temp as f32/100.0), pres, humd);
 
     loop {
 

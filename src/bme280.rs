@@ -48,6 +48,7 @@ pub const REG_DIG_H2_ADDR:      u8 = 0xE1;
 pub const REG_DIG_H3_ADDR:      u8 = 0xE3;
 pub const REG_DIG_H4_ADDR:      u8 = 0xE4;
 pub const REG_DIG_H5_ADDR:      u8 = 0xE5;
+pub const REG_DIG_H6_ADDR:      u8 = 0xE7;
 
 /* BITMASKS */
 pub const OSRS_P_MASK:          u8 = 0b00011100;
@@ -82,6 +83,7 @@ pub struct Bme280Configs {
     pub dig_h3: u8,
     pub dig_h4: i16, 
     pub dig_h5: i16, 
+    pub dig_h6: u8,
     pub osrs_p: Bme280Resolution,
     pub osrs_t: Bme280Resolution,
     pub osrs_h: Bme280Resolution,
@@ -108,6 +110,7 @@ impl Default for Bme280Configs {
             dig_h3: 0,
             dig_h4: 0, 
             dig_h5: 0, 
+            dig_h6: 0,
             osrs_p: Bme280Resolution::Skip,
             osrs_t: Bme280Resolution::Skip,
             osrs_h: Bme280Resolution::Skip
@@ -216,7 +219,7 @@ where
     pub fn read_configs(&mut self) {
 
         let (_mode, osrs_p, osrs_t, osrs_h) = self.read_ctrl_meas();
-        let (dig_h1, dig_h2, dig_h3, dig_h4, dig_h5) = self.read_humd_config();
+        let (dig_h1, dig_h2, dig_h3, dig_h4, dig_h5, dig_h6) = self.read_humd_config();
 
         self.config = Bme280Configs {
             chip_id: self.read_u8(REG_ID_ADDR),
@@ -237,6 +240,7 @@ where
             dig_h3: dig_h3,
             dig_h4: dig_h4,
             dig_h5: dig_h5,
+            dig_h6: dig_h6,
             osrs_p: osrs_p,
             osrs_t: osrs_t,
             osrs_h: osrs_h
@@ -258,7 +262,7 @@ where
         (mode, pres_res, temp_res, humd_res)
     }
 
-    pub fn read_humd_config(&mut self) -> (u8, i16, u8, i16, i16) 
+    pub fn read_humd_config(&mut self) -> (u8, i16, u8, i16, i16, u8) 
     {
         let dig_h1: u8 = self.read_u8(REG_DIG_H1_ADDR);
         let dig_h2: i16 = self.read_i16(REG_DIG_H2_ADDR);
@@ -267,7 +271,8 @@ where
         let dig_h4: i16 = (dig_h4 & DIG_H4_MASK) as i16;
         let dig_h5: u16 = self.read_u16(REG_DIG_H5_ADDR);
         let dig_h5: i16 = ((dig_h5 & DIG_H5_MASK) >> 4) as i16;
-        (dig_h1, dig_h2, dig_h3, dig_h4, dig_h5)
+        let dig_h6: u8 = self.read_u8(REG_DIG_H6_ADDR);
+        (dig_h1, dig_h2, dig_h3, dig_h4, dig_h5, dig_h6)
     }
 
     pub fn set_ctrl_meas(&mut self, mode: Bme280Mode, res_config: Bme280ResolutionConfig)
@@ -365,15 +370,14 @@ where
         return u16::from_le_bytes(rx_buffer_2);
     }
 
-    pub fn read_environment(&mut self) -> (i32, u32, i32) {
+    pub fn read_environment(&mut self) -> (i32, u32, u32) {
         let (temp_adc, pres_adc, humd_adc) = self.read_adc();
         let temp_adc = temp_adc.unwrap();
         let pres_adc = pres_adc.unwrap();
         let humd_adc = humd_adc.unwrap();
-        let (t_fine, temp) = self.compensate_t(temp_adc);
+        let (t_fine, temp) = self.compensate_t(temp_adc).unwrap();
         let pres = self.compensate_p(t_fine, pres_adc).unwrap();
-        // let humd = self.compensate_h_double(t_fine, humd_adc);
-        let humd = 16;
+        let humd = self.compensate_h(t_fine, humd_adc).unwrap();
         (temp, pres, humd)
     }
 
@@ -382,7 +386,7 @@ where
     // dig_t1_64 = 27504.0;
     // dig_t2_64 = 26435.0;
     // dig_t3_64 = -1000.0;
-    fn compensate_t(&self, temp_adc: i32) -> (i32, i32) {
+    fn compensate_t(&self, temp_adc: i32) -> Option<(i32, i32)> {
         let dig_t1 = self.config.dig_t1 as i32;
         let dig_t2 = self.config.dig_t2 as i32;
         let dig_t3: i32 = self.config.dig_t3 as i32;
@@ -390,7 +394,7 @@ where
         let var2 = ((((temp_adc >> 4) - dig_t1) * ((temp_adc >> 4) - (dig_t1)) >> 12) * dig_t3) >> 14;
         let t_fine = var1 + var2;
         let t = (t_fine * 5 + 128) >> 8;
-        (t_fine, t)
+        Some((t_fine, t))
     }
 
     // TODO: Convert test values to unit test
@@ -436,21 +440,34 @@ where
         Some(p)
     }
 
-    fn compensate_h_double(&mut self, t_fine: i32, adc_humd: i32) -> i32 {
+    fn compensate_h(&mut self, t_fine: i32, adc_humd: i32) -> Option<u32> {
+        let dig_h1 = self.config.dig_h1 as i32;
+        let dig_h2 = self.config.dig_h2 as i32;
+        let dig_h3 = self.config.dig_h3 as i32;
+        let dig_h4 = self.config.dig_h4 as i32;
+        let dig_h5 = self.config.dig_h5 as i32;
+        let dig_h6 = self.config.dig_h6 as i32;
 
-        // let v_x1_u32r: i32 = (t_fine as i32) - 76800;
-        // v_x1_u32r = (((((adc_humd << 14) - (((dig_H4) << 20) – (((BME280_S32_t)dig_H5) *
-        //     v_x1_u32r)) + ((BME280_S32_t)16384)) >> 15) * (((((((v_x1_u32r *
-        //     ((BME280_S32_t)dig_H6)) >> 10) * (((v_x1_u32r * ((BME280_S32_t)dig_H3)) >> 11) +
-        //     ((BME280_S32_t)32768))) >> 10) + ((BME280_S32_t)2097152)) * ((BME280_S32_t)dig_H2) +
-        //     8192) >> 14));
-        // v_x1_u32r = (v_x1_u32r – (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *
-        // ((BME280_S32_t)dig_H1)) >> 4));
-        // v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
-        // v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
-        // return (BME280_U32_t)(v_x1_u32r>>12);
-
-        16
+        let mut v_x1_u32r: i32 = (t_fine as i32) - 76800;
+        v_x1_u32r = 
+            (((adc_humd << 14) - ((dig_h4 << 20) - (dig_h5 * v_x1_u32r)) + 16384) >> 15) * 
+            (
+                (
+                    (
+                        (
+                            (
+                                ((v_x1_u32r * dig_h6) >> 10) * 
+                                (((v_x1_u32r * dig_h3) >> 11) + 32768)
+                            ) >> 10
+                        ) + 2097152
+                    ) * dig_h2 + 8192
+                ) >> 14
+            );
+        let temp1 = (v_x1_u32r >> 15) as i64; // unfortunately stm32f1xx crashes at next line if we use i32
+        v_x1_u32r = ((v_x1_u32r as i64)- ((((temp1 * temp1) >> 7) * (dig_h1 as i64)) >> 4)) as i32;
+        v_x1_u32r = if v_x1_u32r < 0 { 0 } else { v_x1_u32r };
+        v_x1_u32r = if v_x1_u32r > 419430400 { 419430400 } else { v_x1_u32r };
+        Some((v_x1_u32r >> 12) as u32)
     }
 
     pub fn read_adc(&mut self) -> (Option<i32>, Option<i32>, Option<i32>) {
