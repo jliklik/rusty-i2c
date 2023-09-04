@@ -1,61 +1,53 @@
+/* BME280 driver
+ *
+ * Rev.         Author          Date                Notes
+ * ===          ======          ====                =====
+ * 0.1          Jian Lik Ng     2023-09-03          Initial Release
+ * 
+ * See links for reference:
+ * https://cdn-shop.adafruit.com/datasheets/BST-BMP280-DS001-11.pdf
+ * https://apollolabsblog.hashnode.dev/stm32f4-embedded-rust-at-the-hal-i2c-temperature-pressure-sensing-with-bmp180
+ * https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf
+ * https://docs.rs/bme280-rs/latest/src/bme280_rs/bme280.rs.html#87-102 
+ */
+
 use cortex_m_semihosting::hprintln;
 use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
 use core::fmt::Debug;
 
 /* CHIP CONSTANTS */
-pub const BME280_CHIP_ID: u8 = 0x60; // BME180 ID 0x60 - temp, press and humidity sensor
-pub const _BMP280_CHIP_ID: u8 = 0x58; // BMP180 ID 0x60 - only temp and press sensor
-pub const RESET_VAL: u8 = 0xB6;
+pub const BME280_CHIP_ID:       u8 = 0x60;  // BME280 ID 0x60 - temp, press and humidity sensor
+pub const _BMP280_CHIP_ID:      u8 = 0x58;  // BMP280 ID 0x60 - only temp and press sensor
+pub const RESET_VAL:            u8 = 0xB6;
 
 /* ADDRESSES */
-pub const BME280_ADDR: u8 = 0x76; // I2C address
-pub const REG_ID_ADDR: u8 = 0xD0; // chip ID
-pub const REG_RESET_ADDR: u8 = 0xE0; 
-// Writing 0xB6 to REG_RESET_ADDR will power on reset the device
-pub const _REG_STATUS_ADDR: u8 = 0xF3; 
-// _REG_STATUS_ADDR contains two bits which indicates status (image update or measuring statuses)
-pub const REG_CTRL_MEAS_ADDR: u8 = 0xF4; 
-// REG_CTRL_MEAS_ADDR controls oversampling of the temp data and power mode
-pub const _REG_CONFIG_ADDR: u8 = 0xF5; 
-// _REG_CONFIG_ADDR sets rate, filter and interface options of the device
-pub const REG_PRES_ADDR: u8 = 0xF7; // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
-pub const REG_TEMP_ADDR: u8 = 0xFA; // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
-pub const REG_DIG_T1_ADDR: u8 = 0x88;
-pub const REG_DIG_T2_ADDR: u8 = 0x8A; 
-pub const REG_DIG_T3_ADDR: u8 = 0x8C; 
-pub const REG_DIG_P1_ADDR: u8 = 0x8E; 
-pub const REG_DIG_P2_ADDR: u8 = 0x90; 
-pub const REG_DIG_P3_ADDR: u8 = 0x92; 
-pub const REG_DIG_P4_ADDR: u8 = 0x94; 
-pub const REG_DIG_P5_ADDR: u8 = 0x96; 
-pub const REG_DIG_P6_ADDR: u8 = 0x98; 
-pub const REG_DIG_P7_ADDR: u8 = 0x9A; 
-pub const REG_DIG_P8_ADDR: u8 = 0x9C;
-pub const REG_DIG_P9_ADDR: u8 = 0x9E;
+pub const BME280_ADDR:          u8 = 0x76;  // I2C address
+pub const REG_ID_ADDR:          u8 = 0xD0;  // chip ID
+pub const REG_RESET_ADDR:       u8 = 0xE0;  // Writing 0xB6 to REG_RESET_ADDR will power on reset the device
+
+pub const REG_CTRL_HUM_ADDR:    u8 = 0xF2;  // Changes to this register only become effective after write operation to CTRL_MEAS
+pub const _REG_STATUS_ADDR:     u8 = 0xF3;  // _REG_STATUS_ADDR contains two bits which indicates status (image update or measuring statuses)
+pub const REG_CTRL_MEAS_ADDR:   u8 = 0xF4;  // REG_CTRL_MEAS_ADDR controls oversampling of the temp data and power mode
+pub const _REG_CONFIG_ADDR:     u8 = 0xF5;  // _REG_CONFIG_ADDR sets rate, filter and interface options of the device
+pub const REG_PRES_ADDR:        u8 = 0xF7;  // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
+pub const REG_TEMP_ADDR:        u8 = 0xFA;  // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
+pub const REG_DIG_T1_ADDR:      u8 = 0x88;
+pub const REG_DIG_T2_ADDR:      u8 = 0x8A; 
+pub const REG_DIG_T3_ADDR:      u8 = 0x8C; 
+pub const REG_DIG_P1_ADDR:      u8 = 0x8E; 
+pub const REG_DIG_P2_ADDR:      u8 = 0x90; 
+pub const REG_DIG_P3_ADDR:      u8 = 0x92; 
+pub const REG_DIG_P4_ADDR:      u8 = 0x94; 
+pub const REG_DIG_P5_ADDR:      u8 = 0x96; 
+pub const REG_DIG_P6_ADDR:      u8 = 0x98; 
+pub const REG_DIG_P7_ADDR:      u8 = 0x9A; 
+pub const REG_DIG_P8_ADDR:      u8 = 0x9C;
+pub const REG_DIG_P9_ADDR:      u8 = 0x9E;
 
 /* BITMASKS */
-pub const OSRS_P_MASK: u8 = 0b00011100;
-pub const OSRS_T_MASK: u8 = 0b11100000;
+pub const OSRS_P_MASK:          u8 = 0b00011100;
+pub const OSRS_T_MASK:          u8 = 0b11100000;
 
-// Architecture 1: use traits, multiple Bme280 structs
-// trait Bme280 {
-//     fn new() -> Self;
-//     fn read_u8() -> u8;
-//     fn read_u16() -> u16;
-// }
-
-// then after defining trait, implement these:
-// struct Bme280_pins67 which implements trait Bme280
-// struct Bme280_pins89 which implements trait Bme280
-// struct Bme280_pins1011 which implements trait Bme280
-// but the issue is that there are many repeated functions - only new() is unique
-
-// can we not instead make a Bme280 generic type?
-// new() function does not allow us to 
-
-// Architecture 2: Generic struct
-// Generic struct - pass in I2C instead of creating it inside here - too difficult
-// and not much benefit to create i2c object in this module
 pub struct Bme280<I2cT, Delay> {
     pub i2c_addr: u8,
     i2c: I2cT,
@@ -106,12 +98,12 @@ impl Default for Bme280Configs {
 #[repr(u8)] // allow us to cast enums to u8s
 #[derive(Copy, Clone)]
 pub enum Bme280Resolution {
-    Skip = 0,
-    UltraLowPower = 1,
-    LowPower = 2,
-    StandardRes = 4,
-    HighRes = 8,
-    UltraHighRes = 16
+    Skip = 0b000,
+    UltraLowPower = 0b001,
+    LowPower = 0b010,
+    StandardRes = 0b011,
+    HighRes = 0b100,
+    UltraHighRes = 0b101
 }
 
 
@@ -126,6 +118,39 @@ impl Bme280Resolution {
             _ => Bme280Resolution::UltraHighRes
         }
     }
+}
+
+pub struct Bme280ResolutionConfig{
+    pub temp_res: Bme280Resolution,
+    pub pres_res: Bme280Resolution,
+    pub humd_res: Bme280Resolution
+}
+
+pub struct Bme280ResolutionUseCase(Bme280Resolution, Bme280Resolution, Bme280Resolution);
+
+
+impl Bme280ResolutionUseCase {
+    // temp res, press res, humidity res
+    const WEATHER_MONITORING: Bme280ResolutionConfig = Bme280ResolutionConfig{
+        temp_res: Bme280Resolution::UltraLowPower, 
+        pres_res: Bme280Resolution::UltraLowPower, 
+        humd_res: Bme280Resolution::UltraLowPower
+    };
+    const HUMIDITY_SENSING: Bme280ResolutionConfig = Bme280ResolutionConfig{
+        temp_res: Bme280Resolution::UltraLowPower, 
+        pres_res: Bme280Resolution::Skip, 
+        humd_res: Bme280Resolution::UltraLowPower,
+    };
+    const INDOOR_NAVIGATION: Bme280ResolutionConfig = Bme280ResolutionConfig{
+        temp_res: Bme280Resolution::LowPower, 
+        pres_res: Bme280Resolution::UltraHighRes,
+        humd_res: Bme280Resolution::UltraLowPower
+    };
+    const GAMING: Bme280ResolutionConfig =  Bme280ResolutionConfig{
+        temp_res: Bme280Resolution::UltraLowPower, 
+        pres_res: Bme280Resolution::StandardRes, 
+        humd_res: Bme280Resolution::Skip
+    };
 }
 
 #[repr(u8)]
@@ -155,15 +180,11 @@ where
         }   
     }
 
-    pub fn init(&mut self, temp_res: Bme280Resolution, pres_res: Bme280Resolution) {
+    pub fn init(&mut self, res_config: Bme280ResolutionConfig) {
         self.reset();
-        self.delay.delay_ms(500_u32);
-        self.set_power_mode(Bme280Mode::Normal);
-        self.delay.delay_ms(500_u32);
-        self.write_temp_res(temp_res);
-        self.delay.delay_ms(500_u32);
-        self.write_pres_res(pres_res);
-        self.delay.delay_ms(500_u32);
+        self.delay.delay_ms(50_u32);
+        self.set_control_reg(Bme280Mode::Normal, res_config);
+        self.delay.delay_ms(50_u32);
     
         // Debug
         let mut rx_buffer: [u8; 1] = [0];
@@ -196,6 +217,17 @@ where
         if self.config.chip_id != BME280_CHIP_ID {
             panic!("Actual chip id: {}, expected chip id: {}", self.config.chip_id, BME280_CHIP_ID);
         }
+    }
+
+    pub fn set_control_reg(&mut self, mode: Bme280Mode, res_config: Bme280ResolutionConfig)
+    {
+        let mode: u8 = mode as u8;
+        let temp_res = res_config.temp_res as u8;
+        let pres_res = res_config.pres_res as u8;
+        let humd_res = res_config.humd_res as u8;
+        self.write_u8(REG_CTRL_HUM_ADDR, humd_res);
+        let write_val = mode + pres_res << 2  + temp_res << 5;
+        self.write_u8(REG_CTRL_MEAS_ADDR, write_val);
     }
 
     pub fn set_power_mode(&mut self, mode: Bme280Mode) {

@@ -47,16 +47,7 @@ fn main() -> ! {
 
     let delay = cp.SYST.delay(&clocks);
 
-    // See the following pages for reference:
-    // However, keep in mind that the chip that we actually have is the BMP280, not the BMP180
-    // https://cdn-shop.adafruit.com/datasheets/BST-BMP280-DS001-11.pdf
-    // https://apollolabsblog.hashnode.dev/stm32f4-embedded-rust-at-the-hal-i2c-temperature-pressure-sensing-with-bmp180
-    // https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf
-    // https://docs.rs/bme280-rs/latest/src/bme280_rs/bme280.rs.html#87-102 
-
     let mut sensor = bme280::Bme280::new(i2c, delay);
-
-    hprintln!("Read configs: \r");
 
     sensor.init(bme280::Bme280Resolution::UltraLowPower, bme280::Bme280Resolution::StandardRes);
     sensor.read_configs();
