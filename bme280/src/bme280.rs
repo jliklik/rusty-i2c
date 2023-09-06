@@ -9,9 +9,9 @@
  * https://apollolabsblog.hashnode.dev/stm32f4-embedded-rust-at-the-hal-i2c-temperature-pressure-sensing-with-bmp180
  * https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf
  * https://docs.rs/bme280-rs/latest/src/bme280_rs/bme280.rs.html#87-102 
+ * Testing on embedded: https://github.com/knurling-rs/defmt/tree/main/firmware/defmt-test
  */
 
-use cortex_m_semihosting::hprintln;
 use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
 use core::fmt::Debug;
 
@@ -30,7 +30,7 @@ pub const _REG_STATUS_ADDR:     u8 = 0xF3;  // _REG_STATUS_ADDR contains two bit
 pub const REG_CTRL_MEAS_ADDR:   u8 = 0xF4;  // REG_CTRL_MEAS_ADDR controls oversampling of the temp data and power mode
 pub const _REG_CONFIG_ADDR:     u8 = 0xF5;  // _REG_CONFIG_ADDR sets rate, filter and interface options of the device
 pub const REG_PRES_ADDR:        u8 = 0xF7;  // pressure measurement: _msb, _lsb, _xlsb (depending on resolution)
-pub const REG_TEMP_ADDR:        u8 = 0xFA;  // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
+pub const _REG_TEMP_ADDR:       u8 = 0xFA;  // temperature measurement:  _msb, _lsb, _xlsb (depending on resolution)
 pub const REG_DIG_T1_ADDR:      u8 = 0x88;
 pub const REG_DIG_T2_ADDR:      u8 = 0x8A; 
 pub const REG_DIG_T3_ADDR:      u8 = 0x8C; 
@@ -64,6 +64,7 @@ pub struct Bme280<I2cT, Delay> {
     pub config: Bme280Configs
 }
 
+#[derive(Copy, Clone)]
 pub struct Bme280Configs {
     pub chip_id: u8,
     pub dig_t1: u16,
@@ -172,6 +173,80 @@ pub const BME280_RES_CONFIG_GAMING: Bme280ResolutionConfig =  Bme280ResolutionCo
     humd_res: Bme280Resolution::Skip
 };
 
+pub fn compensate_t(config: Bme280Configs, temp_adc: i32) -> Option<(i32, i32)> {
+    let dig_t1 = config.dig_t1 as i32;
+    let dig_t2 = config.dig_t2 as i32;
+    let dig_t3: i32 = config.dig_t3 as i32;
+    let var1 = (((temp_adc >> 3) - (dig_t1 << 1)) * dig_t2) >> 11;
+    let var2 = ((((temp_adc >> 4) - dig_t1) * ((temp_adc >> 4) - (dig_t1)) >> 12) * dig_t3) >> 14;
+    let t_fine = var1 + var2;
+    let t = (t_fine * 5 + 128) >> 8;
+    Some((t_fine, t))
+}
+
+fn compensate_p(config: Bme280Configs, t_fine: i32, adc_pres: i32) -> Option<u32> {
+    let dig_p1 = config.dig_p1 as i32;
+    let dig_p2 = config.dig_p2 as i32;
+    let dig_p3 = config.dig_p3 as i32;
+    let dig_p4 = config.dig_p4 as i32;
+    let dig_p5 = config.dig_p5 as i32;
+    let dig_p6 = config.dig_p6 as i32;
+    let dig_p7 = config.dig_p7 as i32;
+    let dig_p8 = config.dig_p8 as i32;
+    let dig_p9 = config.dig_p9 as i32;
+
+    let mut var1 = (t_fine >> 1) - 64000;
+    let mut var2 = (((var1 >> 2) * (var1 >> 2)) >> 11) * dig_p6;
+    var2 = var2 + ((var1 * dig_p5) << 1);
+    var2 = (var2 >> 2) + (dig_p4 << 16);
+    var1 = (((dig_p3 * ((var1 >> 2) * (var1 >> 2) >> 13)) >> 3) + ((dig_p2 * var1) >> 1)) >> 18;
+    var1 = ((32768 + var1) * (dig_p1)) >> 15;
+    if var1 == 0 {
+        return None;
+    }
+    let mut p = (((1048576 - adc_pres) - (var2 >> 12)) * 3125) as u32;
+    if p < 0x80000000 {
+        p = (p << 1) / (var1 as u32);
+    }
+    else {
+        p = p / (var1 as u32) * 2;
+    }
+    var1 = (dig_p9 * (((p >> 3) * (p >> 3)) >> 13) as i32) >> 12;
+    var2 = (((p >> 2) as i32) * dig_p8) >> 13;
+    p = ((p as i32) + ((var1 + var2 + dig_p7) >> 4)) as u32;
+    Some(p)
+}
+
+fn compensate_h(config: Bme280Configs, t_fine: i32, adc_humd: i32) -> Option<u32> {
+    let dig_h1 = config.dig_h1 as i32;
+    let dig_h2 = config.dig_h2 as i32;
+    let dig_h3 = config.dig_h3 as i32;
+    let dig_h4 = config.dig_h4 as i32;
+    let dig_h5 = config.dig_h5 as i32;
+    let dig_h6 = config.dig_h6 as i32;
+
+    let mut v_x1_u32r: i32 = (t_fine as i32) - 76800;
+    v_x1_u32r = 
+        (((adc_humd << 14) - ((dig_h4 << 20) - (dig_h5 * v_x1_u32r)) + 16384) >> 15) * 
+        (
+            (
+                (
+                    (
+                        (
+                            ((v_x1_u32r * dig_h6) >> 10) * 
+                            (((v_x1_u32r * dig_h3) >> 11) + 32768)
+                        ) >> 10
+                    ) + 2097152
+                ) * dig_h2 + 8192
+            ) >> 14
+        );
+    let temp1 = (v_x1_u32r >> 15) as i64; // unfortunately stm32f1xx crashes at next line if we use i32
+    v_x1_u32r = ((v_x1_u32r as i64)- ((((temp1 * temp1) >> 7) * (dig_h1 as i64)) >> 4)) as i32;
+    v_x1_u32r = if v_x1_u32r < 0 { 0 } else { v_x1_u32r };
+    v_x1_u32r = if v_x1_u32r > 419430400 { 419430400 } else { v_x1_u32r };
+    Some((v_x1_u32r >> 12) as u32)
+}
+
 
 #[repr(u8)]
 pub enum Bme280Mode {
@@ -209,7 +284,6 @@ where
         // Debug
         let mut rx_buffer: [u8; 1] = [0];
         self.i2c.write_read(self.i2c_addr, &[REG_CTRL_MEAS_ADDR], &mut rx_buffer).unwrap();
-        hprintln!("control reg after init: {}", rx_buffer[0]);
     }
 
     pub fn reset(&mut self) {
@@ -218,7 +292,7 @@ where
 
     pub fn read_configs(&mut self) {
 
-        let (_mode, osrs_p, osrs_t, osrs_h) = self.read_ctrl_meas();
+        let (mode, osrs_p, osrs_t, osrs_h) = self.read_ctrl_meas();
         let (dig_h1, dig_h2, dig_h3, dig_h4, dig_h5, dig_h6) = self.read_humd_config();
 
         self.config = Bme280Configs {
@@ -245,9 +319,16 @@ where
             osrs_t: osrs_t,
             osrs_h: osrs_h
         };
-        if self.config.chip_id != BME280_CHIP_ID {
-            panic!("Actual chip id: {}, expected chip id: {}", self.config.chip_id, BME280_CHIP_ID);
-        }
+        
+        // match if self.config.chip_id != BME280_CHIP_ID {
+        //         Ok(mode)
+        //     } else {
+        //         Err(())
+        //     }
+        // {
+        //     Ok(mode) => Ok(mode),
+        //     Err(e) => Err(e)
+        // }   
     }
 
     pub fn read_ctrl_meas(&mut self) -> (u8, Bme280Resolution, Bme280Resolution, Bme280Resolution) 
@@ -278,8 +359,8 @@ where
     pub fn set_ctrl_meas(&mut self, mode: Bme280Mode, res_config: Bme280ResolutionConfig)
     {
         let mode: u8 = mode as u8;
-        let mut temp_res = res_config.temp_res as u8;
-        let mut pres_res = res_config.pres_res as u8;
+        let temp_res = res_config.temp_res as u8;
+        let pres_res = res_config.pres_res as u8;
         let humd_res = res_config.humd_res as u8;
         self.write_u8(REG_CTRL_HUM_ADDR, humd_res);
         let write_val = mode + (pres_res << 2) + (temp_res << 5);
@@ -375,99 +456,10 @@ where
         let temp_adc = temp_adc.unwrap();
         let pres_adc = pres_adc.unwrap();
         let humd_adc = humd_adc.unwrap();
-        let (t_fine, temp) = self.compensate_t(temp_adc).unwrap();
-        let pres = self.compensate_p(t_fine, pres_adc).unwrap();
-        let humd = self.compensate_h(t_fine, humd_adc).unwrap();
+        let (t_fine, temp) = compensate_t(self.config, temp_adc).unwrap();
+        let pres = compensate_p(self.config, t_fine, pres_adc).unwrap();
+        let humd = compensate_h(self.config, t_fine, humd_adc).unwrap();
         (temp, pres, humd)
-    }
-
-    // TODO: Convert test values to unit test
-    // adc_t_64 = 519888.0;
-    // dig_t1_64 = 27504.0;
-    // dig_t2_64 = 26435.0;
-    // dig_t3_64 = -1000.0;
-    fn compensate_t(&self, temp_adc: i32) -> Option<(i32, i32)> {
-        let dig_t1 = self.config.dig_t1 as i32;
-        let dig_t2 = self.config.dig_t2 as i32;
-        let dig_t3: i32 = self.config.dig_t3 as i32;
-        let var1 = (((temp_adc >> 3) - (dig_t1 << 1)) * dig_t2) >> 11;
-        let var2 = ((((temp_adc >> 4) - dig_t1) * ((temp_adc >> 4) - (dig_t1)) >> 12) * dig_t3) >> 14;
-        let t_fine = var1 + var2;
-        let t = (t_fine * 5 + 128) >> 8;
-        Some((t_fine, t))
-    }
-
-    // TODO: Convert test values to unit test
-    // let dig_p1_64: f64 = 36477.0;
-    // let dig_p2_64: f64 = -10685.0;
-    // let dig_p3_64: f64 = 3024.0;
-    // let dig_p4_64: f64 = 2855.0;
-    // let dig_p5_64: f64 = 140.0;
-    // let dig_p6_64: f64 = -7.0;
-    // let dig_p7_64: f64 = 15500.0;
-    // let dig_p8_64: f64 = -14600.0;
-    // let dig_p9_64: f64 = 6000.0;
-    fn compensate_p(&mut self, t_fine: i32, adc_pres: i32) -> Option<u32> {
-        let dig_p1 = self.config.dig_p1 as i32;
-        let dig_p2 = self.config.dig_p2 as i32;
-        let dig_p3 = self.config.dig_p3 as i32;
-        let dig_p4 = self.config.dig_p4 as i32;
-        let dig_p5 = self.config.dig_p5 as i32;
-        let dig_p6 = self.config.dig_p6 as i32;
-        let dig_p7 = self.config.dig_p7 as i32;
-        let dig_p8 = self.config.dig_p8 as i32;
-        let dig_p9 = self.config.dig_p9 as i32;
-
-        let mut var1 = (t_fine >> 1) - 64000;
-        let mut var2 = (((var1 >> 2) * (var1 >> 2)) >> 11) * dig_p6;
-        var2 = var2 + ((var1 * dig_p5) << 1);
-        var2 = (var2 >> 2) + (dig_p4 << 16);
-        var1 = (((dig_p3 * ((var1 >> 2) * (var1 >> 2) >> 13)) >> 3) + ((dig_p2 * var1) >> 1)) >> 18;
-        var1 = ((32768 + var1) * (dig_p1)) >> 15;
-        if var1 == 0 {
-            return None;
-        }
-        let mut p = (((1048576 - adc_pres) - (var2 >> 12)) * 3125) as u32;
-        if p < 0x80000000 {
-            p = (p << 1) / (var1 as u32);
-        }
-        else {
-            p = p / (var1 as u32) * 2;
-        }
-        var1 = (dig_p9 * (((p >> 3) * (p >> 3)) >> 13) as i32) >> 12;
-        var2 = (((p >> 2) as i32) * dig_p8) >> 13;
-        p = ((p as i32) + ((var1 + var2 + dig_p7) >> 4)) as u32;
-        Some(p)
-    }
-
-    fn compensate_h(&mut self, t_fine: i32, adc_humd: i32) -> Option<u32> {
-        let dig_h1 = self.config.dig_h1 as i32;
-        let dig_h2 = self.config.dig_h2 as i32;
-        let dig_h3 = self.config.dig_h3 as i32;
-        let dig_h4 = self.config.dig_h4 as i32;
-        let dig_h5 = self.config.dig_h5 as i32;
-        let dig_h6 = self.config.dig_h6 as i32;
-
-        let mut v_x1_u32r: i32 = (t_fine as i32) - 76800;
-        v_x1_u32r = 
-            (((adc_humd << 14) - ((dig_h4 << 20) - (dig_h5 * v_x1_u32r)) + 16384) >> 15) * 
-            (
-                (
-                    (
-                        (
-                            (
-                                ((v_x1_u32r * dig_h6) >> 10) * 
-                                (((v_x1_u32r * dig_h3) >> 11) + 32768)
-                            ) >> 10
-                        ) + 2097152
-                    ) * dig_h2 + 8192
-                ) >> 14
-            );
-        let temp1 = (v_x1_u32r >> 15) as i64; // unfortunately stm32f1xx crashes at next line if we use i32
-        v_x1_u32r = ((v_x1_u32r as i64)- ((((temp1 * temp1) >> 7) * (dig_h1 as i64)) >> 4)) as i32;
-        v_x1_u32r = if v_x1_u32r < 0 { 0 } else { v_x1_u32r };
-        v_x1_u32r = if v_x1_u32r > 419430400 { 419430400 } else { v_x1_u32r };
-        Some((v_x1_u32r >> 12) as u32)
     }
 
     pub fn read_adc(&mut self) -> (Option<i32>, Option<i32>, Option<i32>) {
@@ -507,3 +499,67 @@ where
 
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_approx_eq::assert_approx_eq;
+
+    struct TestContext{
+        bme280_config: Bme280Configs,
+    }
+
+    impl Drop for TestContext {
+        fn drop(&mut self) {
+            println!("Test teardown ...");
+        }
+    }
+
+    fn setup() -> TestContext {
+        println!("Test setup ...");
+
+        TestContext {
+            bme280_config: Bme280Configs{
+                chip_id: 0,
+                dig_t1: 27504,
+                dig_t2: 26435,
+                dig_t3: -1000,
+                dig_p1: 36477,
+                dig_p2: -10685,
+                dig_p3: 3024,
+                dig_p4: 2855,
+                dig_p5: 140,
+                dig_p6: -7,
+                dig_p7: 15500,
+                dig_p8: -14600,
+                dig_p9: 6000,
+                dig_h1: 0,
+                dig_h2: 0,
+                dig_h3: 0,
+                dig_h4: 0, 
+                dig_h5: 0, 
+                dig_h6: 0,
+                osrs_p: Bme280Resolution::Skip,
+                osrs_t: Bme280Resolution::Skip,
+                osrs_h: Bme280Resolution::Skip
+            },
+        }
+    }
+
+    #[test]
+    fn test_temp_compensation_formula() {
+        let ctx = setup();
+        let adc_t = 519888;
+        let (_t_fine, temp) = compensate_t(ctx.bme280_config, adc_t).unwrap();
+        assert_eq!(temp, 2508);
+    }
+
+    #[test]
+    fn test_pres_compensation_formula() {
+        let ctx = setup();
+        let adc_p = 415148;
+        let t_fine = 128422;
+        let pres = compensate_p(ctx.bme280_config, t_fine, adc_p).unwrap();
+        assert_approx_eq!(pres as f32, 100653 as f32, 10.0);
+    }
+
+}

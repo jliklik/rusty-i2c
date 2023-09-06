@@ -13,7 +13,7 @@ use stm32f1xx_hal::{
     prelude::*
 }; // STM32F1 hardware abstraction layer crate
 
-mod bme280; 
+use bme280;
 
 #[entry]
 fn main() -> ! {
@@ -45,18 +45,21 @@ fn main() -> ! {
         1000
     );
 
-    let delay = cp.SYST.delay(&clocks);
+    let mut bme280_delay = cp.SYST.delay(&clocks);
+    let mut sensor = bme280::Bme280::new(i2c, bme280_delay);
 
-    let mut sensor = bme280::Bme280::new(i2c, delay);
-
+    hprintln!("Intializing sensor");
     sensor.init(bme280::BME280_RES_CONFIG_WEATHER_MONITORING);
+    hprintln!("Intialized sensor");
     sensor.read_configs();
     hprintln!("chip_id: {}", sensor.config.chip_id);
     let (temp, pres, humd) = sensor.read_environment();
     hprintln!("temp: {} deg C, pres: {} Pa, humd: {}", (temp as f32/100.0), pres, humd);
 
     loop {
-
+        // loop_delay.delay_ms(5000_u32);
+        // let (temp, pres, humd) = sensor.read_environment();
+        // hprintln!("temp: {} deg C, pres: {} Pa, humd: {}", (temp as f32/100.0), pres, humd);
     }
 
 }

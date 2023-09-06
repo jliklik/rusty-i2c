@@ -1,0 +1,31 @@
+[package]
+name = "exec"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bme280 = { path = "../bme280" }
+# Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
+panic-halt = "0.2.0"
+embedded-hal = "0.2.7"
+cortex-m = "0.7.6"
+cortex-m-rt = "0.7.1"
+cortex-m-semihosting = "0.5.0"
+
+[dependencies.stm32f1xx-hal]
+version = "0.10.0"
+features = ["rt", "stm32f103", "medium"]
+
+# # default runner starts a GDB session, which requires OpenOCD to be running
+# # eg. openocd -f interface/stlink-v2-1.cfg -f target/stm32f1x.cfg
+[target.thumbv7m-none-eabi]
+runner = "gdb-multiarch -q -x ./openocd.gdb"
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+]
+
+[build]
+target = "thumbv7m-none-eabi"
+
